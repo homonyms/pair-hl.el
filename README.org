@@ -1,0 +1,46 @@
+#+TITLE: pair-hl.el — Highlight enclosing and adjacent pairs for Emacs
+#+AUTHOR: Dohna
+
+=pair-hl.el= is a minor mode that dynamically highlights the enclosing and
+adjacent delimiter pairs as you move point.  Works for parentheses,
+brackets, braces and string quotes.
+
+* Installation
+#+begin_src emacs-lisp
+(add-to-list 'load-path "/path/to/pair-hl.el")
+(require 'pair-hl)
+#+end_src
+
+* Usage
+To toggle the mode in the current buffer: =M-x pair-hl-mode=
+
+To start the mode automatically in most programming modes:
+#+begin_src emacs-lisp
+(add-hook 'prog-mode-hook #'pair-hl-mode)
+#+end_src
+
+* Faces
+| Face                         | Default           | Meaning                 |
+|------------------------------+-------------------+-------------------------|
+| =pair-hl-enclosing-face=       | underline         | Inner enclosing pair    |
+| =pair-hl-adjacent-before-face= | wheat background  | Pair directly before pt |
+| =pair-hl-adjacent-after-face=  | turquoise bg      | Pair directly after pt  |
+| =pair-hl-mismatch-face=        | salmon background | Unmatched/mismatched    |
+
+* Customization
+| Option                            | Default | Description                                       |
+|-----------------------------------+---------+---------------------------------------------------|
+| =pair-hl-debounce-delay=            | 0.2     | Idle seconds before recalc (0 = immediate)        |
+| =pair-hl-highlight-enclosing=       | t       | Highlight innermost enclosing pair                |
+| =pair-hl-highlight-adjacent-before= | t       | Highlight pair directly before point              |
+| =pair-hl-highlight-adjacent-after=  | t       | Highlight pair directly after point               |
+| =pair-hl-adjacent-max-distance=     | 1       | Max chars to scan around point for adjacent pairs |
+| =pair-hl-highlight-string-quotes=   | t       | Highlight string-quote delimiters (class 7)       |
+
+* Limitations
+- Relies on the buffer's syntax table; delimiter detection depends on
+  the major mode providing correct syntax classes.
+- Does not scan inside strings or comments for literal delimiters.
+
+* License
+GPL-3.0-or-later
