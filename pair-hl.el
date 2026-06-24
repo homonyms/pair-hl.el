@@ -7,7 +7,7 @@
 ;; Author: Dohna <pub@lya.moe>
 ;; Keywords: faces, convenience
 ;; URL: https://codeberg.org/dohna/pair-hl.el
-;; Version: 0.1.0
+;; Version: 0.2.0
 ;; Package-Requires: ((emacs "29.1"))
 
 ;; This file is NOT part of GNU Emacs.
