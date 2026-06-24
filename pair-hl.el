@@ -79,6 +79,17 @@ exactly next to a delimiter for it to light up."
   :type 'boolean
   :group 'pair-hl)
 
+(defcustom pair-hl-show-pair-context-when-offscreen 'adjacent
+  "What off-screen pair context to show in the echo area.
+When nil, never show pair context.
+When `adjacent', show only adjacent pairs that are off-screen.
+When t, show all highlighted pairs (enclosing and adjacent)."
+  :type '(choice
+          (const :tag "Off" nil)
+          (const :tag "Adjacent pairs only" adjacent)
+          (const :tag "All highlighted pairs" t))
+  :group 'pair-hl)
+
 (defface pair-hl-enclosing-face
   '((t :inherit underline))
   "Face for the inner enclosing pair."
@@ -111,6 +122,9 @@ exactly next to a delimiter for it to light up."
 (defvar-local pair-hl--timer nil
   "Store the current debounce idle timer.")
 
+(defvar pair-hl--offscreen-shown nil
+  "Non-nil when the offscreen pair context is currently shown.")
+
 (defun pair-hl--clear ()
   "Remove all active pair highlights."
   (mapc #'delete-overlay pair-hl--overlays)
@@ -123,8 +137,8 @@ exactly next to a delimiter for it to light up."
     (setq pair-hl--timer nil)))
 
 (defun pair-hl--get-enclosing-pair (ppss)
-  "Return (open-pos . close-pos) for the inner enclosing pair.
-Returns (mismatch . pos) if the opening delimiter is unmatched."
+  "Return a spec (TYPE START END FACE) for the innermost enclosing pair.
+TYPE is `enclosing' or `mismatch'.  END is nil for mismatches."
   (let* ((string-hl (and (nth 3 ppss)
                          pair-hl-highlight-string-quotes))
          (paren-hl (nth 9 ppss))
@@ -132,13 +146,16 @@ Returns (mismatch . pos) if the opening delimiter is unmatched."
                       (paren-hl (car (last (nth 9 ppss)))))))
     (when start
       (condition-case nil
-          (cons start (1- (scan-sexps start 1)))
-        (scan-error (cons 'mismatch start))))))
+          (list 'enclosing start
+                (1- (scan-sexps start 1))
+                'pair-hl-enclosing-face)
+        (scan-error (list 'mismatch start nil
+                          'pair-hl-mismatch-face))))))
 
-(defun pair-hl--check-adjacent (pos dir max-d)
-  "Check positions near POS for matching delimiters in direction DIR.
-Returns a single descriptor for the nearest match/mismatch,
-or nil if none found within MAX-D."
+(defun pair-hl--scan-pair-at (pos dir max-d)
+  "Return a spec (TYPE START END FACE) by scanning from POS in direction DIR,
+or nil if none found within MAX-D.  TYPE is `before', `after',
+or `mismatch'.  END is nil for mismatches."
   (let* ((beg (point-min))
          (end (point-max))
          (backward (< dir 0))
@@ -157,84 +174,147 @@ or nil if none found within MAX-D."
                           (match-pos (scan-sexps start-pos dir)))
                 (throw 'ret
                        (if backward
-                           `(before ,match-pos ,current-pos)
-                         `(after ,current-pos ,(1- match-pos)))))
+                           (list 'before match-pos current-pos
+                                 'pair-hl-adjacent-before-face)
+                         (list 'after current-pos (1- match-pos)
+                               'pair-hl-adjacent-after-face))))
             (scan-error
-             (throw 'ret
-                    (if backward
-                        `(mismatch-before ,current-pos)
-                      `(mismatch-after ,current-pos)))))))
+             (throw 'ret (list 'mismatch current-pos nil
+                               'pair-hl-mismatch-face))))))
       nil)))
 
-(defun pair-hl--get-adjacent-pairs (ppss)
-  (unless (or (nth 3 ppss) (nth 4 ppss))
-    (let ((p (point))
-          (max-d (max 1 (or pair-hl-adjacent-max-distance 1))))
-      (delq nil (list (pair-hl--check-adjacent (1- p) -1 max-d)
-                      (pair-hl--check-adjacent p 1 max-d))))))
+(defun pair-hl--get-before-pair (pos max-d)
+  "Return a spec for the paired delimiter directly before POS.
+See `pair-hl--scan-pair-at' for the return format."
+  (pair-hl--scan-pair-at (1- pos) -1 max-d))
+
+(defun pair-hl--get-after-pair (pos max-d)
+  "Return a spec for the paired delimiter directly after POS.
+See `pair-hl--scan-pair-at' for the return format."
+  (pair-hl--scan-pair-at pos 1 max-d))
 
 (defun pair-hl--render-overlays (specs)
   "Reuse existing overlays and hide unused ones based on SPECS.
-SPECS is a list of (pos . face)."
+SPECS is a list of (TYPE START END FACE) specs."
   (let ((old-ovs pair-hl--overlays)
         (new-ovs nil)
         (win (selected-window)))
     (dolist (spec specs)
-      (let* ((pos (car spec))
-             (face (cdr spec))
-             (ov (if old-ovs
-                     (pop old-ovs)
-                   (let ((new (make-overlay pos (1+ pos) nil t nil)))
-                     (overlay-put new 'priority 100)
-                     (overlay-put new 'evaporate t)
-                     (overlay-put new 'window win)
-                     new))))
-        (move-overlay ov pos (1+ pos))
-        (overlay-put ov 'face face)
-        (push ov new-ovs)))
+      (let* ((start (nth 1 spec))
+             (end (nth 2 spec))
+             (face (nth 3 spec))
+             (positions (if end (list start end) (list start))))
+        (dolist (pos positions)
+          (let ((ov (if old-ovs
+                        (pop old-ovs)
+                      (let ((new (make-overlay pos (1+ pos) nil t nil)))
+                        (overlay-put new 'priority 100)
+                        (overlay-put new 'evaporate t)
+                        (overlay-put new 'window win)
+                        new))))
+            (move-overlay ov pos (1+ pos))
+            (overlay-put ov 'face face)
+            (push ov new-ovs)))))
     (mapc #'delete-overlay old-ovs)
     (setq pair-hl--overlays new-ovs)))
 
+(defun pair-hl--fontified-line-for-positions (line-number line-pos-pairs)
+  "Return LINE-NUMBER and fontified LINE-POS-PAIRS as a string.
+LINE-POS-PAIRS is a list of (POS . FACE) cons cells."
+  (save-excursion
+    (goto-char (caar line-pos-pairs))
+    (let ((bol (line-beginning-position))
+          (eol (line-end-position)))
+      (when font-lock-mode
+        (font-lock-ensure bol eol))
+
+      (let ((str (buffer-substring bol eol)))
+        (dolist (pair line-pos-pairs)
+          (let ((p (car pair))
+                (face (cdr pair)))
+            (add-face-text-property (- p bol) (1+ (- p bol)) face nil str)))
+        (concat (propertize (format "%d: " line-number) 'face 'line-number)
+                str)))))
+
+(defun pair-hl--collect-offscreen-lines (specs)
+  "Return fontified line strings for off-screen positions in SPECS.
+SPECS is a list of (TYPE START END FACE) specs."
+  (let ((win (selected-window))
+        grouped-alist)
+    (dolist (spec specs)
+      (let* ((start (nth 1 spec))
+             (end (nth 2 spec))
+             (face (nth 3 spec))
+             (positions (if end (list start end) (list start))))
+        (dolist (pos positions)
+          (unless (pos-visible-in-window-p pos win)
+            (let* ((line-num (line-number-at-pos pos))
+                   (existing-group (assq line-num grouped-alist)))
+              (if existing-group
+                  (push (cons pos face) (cdr existing-group))
+                (push (cons line-num (list (cons pos face)))
+                      grouped-alist)))))))
+    (nreverse
+     (mapcar
+      (lambda (group)
+        (let ((line-num (car group))
+              (line-entries (cdr group)))
+          (pair-hl--fontified-line-for-positions
+           line-num line-entries)))
+      grouped-alist))))
+
+(defun pair-hl--show-offscreen-context (lines)
+  "Show echo-area context for off-screen pair positions.
+LINES is a list of fontified strings."
+  (setq pair-hl--offscreen-shown t)
+  (message "%s" (string-join lines "\n")))
+
+(defun pair-hl--hide-offscreen-context ()
+  "Clear the offscreen pair context from the echo area."
+  (when pair-hl--offscreen-shown
+    (setq pair-hl--offscreen-shown nil)
+    (message nil)))
+
+(defun pair-hl--collect-highlights ()
+  "Collect the list of highlights if not interrupted by input.
+Returns a list of (TYPE START END FACE) specs, or t if interrupted.
+The enclosing spec, if present, is always the first element."
+  (while-no-input
+    (save-match-data
+      (let* ((ppss (syntax-ppss))
+             (not-in-string-or-comment (not (or (nth 3 ppss) (nth 4 ppss))))
+             (pos (point))
+             (max-d (max 1 (or pair-hl-adjacent-max-distance 1)))
+             (enc (when pair-hl-highlight-enclosing
+                    (pair-hl--get-enclosing-pair ppss)))
+             (bef (when (and not-in-string-or-comment
+                             pair-hl-highlight-adjacent-before)
+                    (pair-hl--get-before-pair pos max-d)))
+             (aft (when (and not-in-string-or-comment
+                             pair-hl-highlight-adjacent-after)
+                    (pair-hl--get-after-pair pos max-d))))
+        (delq nil (list enc bef aft))))))
+
 (defun pair-hl--apply-highlights (buf p)
-  "Calculate and apply highlights in BUF at position P."
+  "Calculate, render highlights in BUF at P, and update offscreen context.
+When `pair-hl-show-pair-context-when-offscreen' is `adjacent',
+the enclosing pair is excluded from the offscreen display."
   (when (and (buffer-live-p buf)
              (eq (current-buffer) buf)
              (eq (point) p))
-    (let ((desired
-           (while-no-input
-             (save-match-data
-               (let* ((ppss (syntax-ppss))
-                      (hl-list nil)
-                      (add-hl (lambda (pos face)
-                                (push (cons pos face) hl-list))))
-
-                 (when pair-hl-highlight-enclosing
-                   (pcase (pair-hl--get-enclosing-pair ppss)
-                     (`(mismatch . ,pos)
-                      (funcall add-hl pos 'pair-hl-mismatch-face))
-                     (`(,open . ,close)
-                      (funcall add-hl open 'pair-hl-enclosing-face)
-                      (funcall add-hl close 'pair-hl-enclosing-face))))
-
-                 (dolist (adj (pair-hl--get-adjacent-pairs ppss))
-                   (pcase adj
-                     (`(mismatch-before ,pos)
-                      (when pair-hl-highlight-adjacent-before
-                        (funcall add-hl pos 'pair-hl-mismatch-face)))
-                     (`(mismatch-after ,pos)
-                      (when pair-hl-highlight-adjacent-after
-                        (funcall add-hl pos 'pair-hl-mismatch-face)))
-                     (`(before ,open ,close)
-                      (when pair-hl-highlight-adjacent-before
-                        (funcall add-hl open 'pair-hl-adjacent-before-face)
-                        (funcall add-hl close 'pair-hl-adjacent-before-face)))
-                     (`(after ,open ,close)
-                      (when pair-hl-highlight-adjacent-after
-                        (funcall add-hl open 'pair-hl-adjacent-after-face)
-                        (funcall add-hl close 'pair-hl-adjacent-after-face)))))
-                 hl-list)))))
-      (unless (eq desired t)
-        (pair-hl--render-overlays desired)))))
+    (let ((hls (pair-hl--collect-highlights)))
+      (unless (eq hls t)
+        (pair-hl--render-overlays hls)
+        (if-let* ((pair-hl-show-pair-context-when-offscreen)
+                  ((eq buf (window-buffer (selected-window))))
+                  (lines (pair-hl--collect-offscreen-lines
+                          (if (and (eq pair-hl-show-pair-context-when-offscreen
+                                       'adjacent)
+                                   (eq (caar hls) 'enclosing))
+                              (cdr hls)
+                            hls))))
+            (pair-hl--show-offscreen-context lines)
+          (pair-hl--hide-offscreen-context))))))
 
 (defun pair-hl--post-command ()
   "Hook run after every command to trigger debounce logic."
@@ -255,7 +335,10 @@ SPECS is a list of (pos . face)."
 
 ;;;###autoload
 (define-minor-mode pair-hl-mode
-  "Minor mode to dynamically highlight enclosing and adjacent pairs."
+  "Minor mode to dynamically highlight enclosing and adjacent pairs.
+When enabled, highlights the innermost enclosing delimiter pair and
+any adjacent pairs around point.  Can optionally show off-screen
+pair context in the echo area (see `pair-hl-show-pair-context-when-offscreen')."
   :init-value nil
   :lighter " PairHL"
   (if pair-hl-mode
@@ -267,6 +350,9 @@ SPECS is a list of (pos . face)."
     (remove-hook 'post-command-hook #'pair-hl--post-command t)
     (pair-hl--cancel-timer)
     (pair-hl--clear)
+    (when pair-hl--offscreen-shown
+      (setq pair-hl--offscreen-shown nil)
+      (message nil))
     (setq pair-hl--last-point nil
           pair-hl--last-tick nil)))
 

@@ -2,8 +2,9 @@
 #+AUTHOR: Dohna
 
 =pair-hl.el= is a minor mode that dynamically highlights the enclosing and
-adjacent delimiter pairs as you move point.  Works for parentheses,
-brackets, braces and string quotes.
+adjacent delimiter pairs as you move point.  When a pair is off-screen,
+it can display the relevant lines in the echo area.  Works for
+parentheses, brackets, braces and string quotes.
 
 * Installation
 #+begin_src emacs-lisp
@@ -36,6 +37,14 @@ To start the mode automatically in most programming modes:
 | =pair-hl-highlight-adjacent-after=  | t       | Highlight pair directly after point               |
 | =pair-hl-adjacent-max-distance=     | 1       | Max chars to scan around point for adjacent pairs |
 | =pair-hl-highlight-string-quotes=   | t       | Highlight string-quote delimiters (class 7)       |
+| =pair-hl-show-pair-context-when-offscreen= | adjacent | Show pair line in echo area when off-screen (nil, adjacent, or t) |
+
+* Off-screen context
+When =pair-hl-show-pair-context-when-offscreen= is non-nil, the mode shows
+the line(s) containing off-screen highlighted pairs in the echo area:
+- =nil= (Off): Never show off-screen context.
+- =adjacent= (Adjacent pairs only): Show only adjacent pairs, excluding the enclosing pair.
+- =t= (All highlighted pairs): Show both enclosing and adjacent pairs.
 
 * Limitations
 - Relies on the buffer's syntax table; delimiter detection depends on
