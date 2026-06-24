@@ -303,7 +303,13 @@ the enclosing pair is excluded from the offscreen display."
              (eq (current-buffer) buf)
              (eq (point) p))
     (let ((hls (pair-hl--collect-highlights)))
-      (unless (eq hls t)
+      (if (eq hls t)
+          ;; Interrupted by pending input; reschedule a short idle timer
+          ;; to try again once Emacs sits idle.
+          (setq pair-hl--timer
+                (run-with-idle-timer 0.05 nil
+                                     #'pair-hl--apply-highlights
+                                     buf p))
         (pair-hl--render-overlays hls)
         (if-let* ((pair-hl-show-pair-context-when-offscreen)
                   ((eq buf (window-buffer (selected-window))))
