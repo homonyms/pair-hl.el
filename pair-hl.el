@@ -193,12 +193,12 @@ See `pair-hl--scan-pair-at' for the return format."
 See `pair-hl--scan-pair-at' for the return format."
   (pair-hl--scan-pair-at pos 1 max-d))
 
-(defun pair-hl--render-overlays (specs)
+(defun pair-hl--render-overlays (specs win)
   "Reuse existing overlays and hide unused ones based on SPECS.
-SPECS is a list of (TYPE START END FACE) specs."
+SPECS is a list of (TYPE START END FACE) specs.
+WIN is the window to assign overlays to."
   (let ((old-ovs pair-hl--overlays)
-        (new-ovs nil)
-        (win (selected-window)))
+        (new-ovs nil))
     (dolist (spec specs)
       (let* ((start (nth 1 spec))
              (end (nth 2 spec))
@@ -236,11 +236,11 @@ LINE-POS-PAIRS is a list of (POS . FACE) cons cells."
         (concat (propertize (format "%d: " line-number) 'face 'line-number)
                 str)))))
 
-(defun pair-hl--collect-offscreen-lines (specs)
+(defun pair-hl--collect-offscreen-lines (specs win)
   "Return fontified line strings for off-screen positions in SPECS.
-SPECS is a list of (TYPE START END FACE) specs."
-  (let ((win (selected-window))
-        grouped-alist)
+SPECS is a list of (TYPE START END FACE) specs.
+WIN is the window to check visibility in."
+  (let (grouped-alist)
     (dolist (spec specs)
       (let* ((start (nth 1 spec))
              (end (nth 2 spec))
@@ -295,8 +295,8 @@ The enclosing spec, if present, is always the first element."
                     (pair-hl--get-after-pair pos max-d))))
         (delq nil (list enc bef aft))))))
 
-(defun pair-hl--apply-highlights (buf p)
-  "Calculate, render highlights in BUF at P, and update offscreen context.
+(defun pair-hl--apply-highlights (buf p win)
+  "Calculate, render highlights in BUF at P in WIN, and update offscreen context.
 When `pair-hl-show-pair-context-when-offscreen' is `adjacent',
 the enclosing pair is excluded from the offscreen display."
   (when (and (buffer-live-p buf)
@@ -309,16 +309,17 @@ the enclosing pair is excluded from the offscreen display."
           (setq pair-hl--timer
                 (run-with-idle-timer 0.05 nil
                                      #'pair-hl--apply-highlights
-                                     buf p))
-        (pair-hl--render-overlays hls)
+                                     buf p win))
+        (pair-hl--render-overlays hls win)
         (if-let* ((pair-hl-show-pair-context-when-offscreen)
-                  ((eq buf (window-buffer (selected-window))))
+                  ((eq buf (window-buffer win)))
                   (lines (pair-hl--collect-offscreen-lines
                           (if (and (eq pair-hl-show-pair-context-when-offscreen
                                        'adjacent)
                                    (eq (caar hls) 'enclosing))
                               (cdr hls)
-                            hls))))
+                            hls)
+                          win)))
             (pair-hl--show-offscreen-context lines)
           (pair-hl--hide-offscreen-context))))))
 
@@ -336,8 +337,8 @@ the enclosing pair is excluded from the offscreen display."
           (setq pair-hl--timer
                 (run-with-idle-timer pair-hl-debounce-delay nil
                                      #'pair-hl--apply-highlights
-                                     (current-buffer) pt))
-        (pair-hl--apply-highlights (current-buffer) pt)))))
+                                     (current-buffer) pt (selected-window)))
+        (pair-hl--apply-highlights (current-buffer) pt (selected-window))))))
 
 ;;;###autoload
 (define-minor-mode pair-hl-mode
@@ -352,7 +353,7 @@ pair context in the echo area (see `pair-hl-show-pair-context-when-offscreen')."
         (add-hook 'post-command-hook #'pair-hl--post-command nil t)
         (setq pair-hl--last-point (point)
               pair-hl--last-tick (buffer-chars-modified-tick))
-        (pair-hl--apply-highlights (current-buffer) (point)))
+        (pair-hl--apply-highlights (current-buffer) (point) (selected-window)))
     (remove-hook 'post-command-hook #'pair-hl--post-command t)
     (pair-hl--cancel-timer)
     (pair-hl--clear)
